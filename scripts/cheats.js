@@ -319,6 +319,16 @@ const cheatList = [
         Vars.ui.showInfoPopup("Unit production time reduced to 1 second!", 3, 1, 1, 1, 1, 1)
     }),
 
+    newCheat("work harder ma boi", "workboiwork", 1, () => {
+        vars.maxEfficiencyEnabled = !vars.maxEfficiencyEnabled
+
+        if (vars.maxEfficiencyEnabled) {
+            Vars.ui.showInfoPopup("Maximum efficiency enabled!", 3, 1, 1, 1, 1, 1)
+        } else {
+            Vars.ui.showInfoPopup("Maximum efficiency disabled!", 3, 1, 1, 1, 1, 1)
+        }
+    }),
+
     newCheat("forhonor", "thisisforhonor", 1, () => { // dryehm's idea
         Vars.player.unit().kill()
     }),
@@ -408,6 +418,97 @@ const cheatList = [
 
     
 ]
+
+// --- Max efficiency tracking and optimized updater ---
+// Instead of iterating every build every update, keep a cached list
+// of potentially-affected builds and only refresh that cache occasionally.
+let _maxEffTracked = []
+let _maxEffUpdateCounter = 0
+let _maxEffRefreshCounter = 0
+const _maxEffRefreshInterval = 600 // ticks between full refreshes (~10s)
+let _maxEffLastState = false
+
+function _refreshMaxEffTracked() {
+    _maxEffTracked = []
+    try {
+        Groups.build.each(b => {
+            try {
+                if (b == null || b.block == null) return
+                if (b.block.category == Category.distribution) return
+
+                // track builds that use liquids, power, or support overdrive
+                if ((b.liquids != null && b.block.liquidCapacity > 0) || (b.power != null) || (b.applyBoost != null && b.block.canOverdrive)) {
+                    _maxEffTracked.push(b)
+                }
+            } catch (e) {
+                Log.infoTag("Cheat Codes Mod", e)
+            }
+        })
+    } catch (e) {
+        Log.infoTag("Cheat Codes Mod", e)
+    }
+}
+
+// Reset cached state on map reset
+Events.on(ResetEvent, () => {
+    _maxEffTracked = []
+    _maxEffUpdateCounter = 0
+    _maxEffRefreshCounter = 0
+    _maxEffLastState = false
+})
+
+// Main updater: runs infrequently and only processes cached builds
+Events.run(Trigger.update, () => {
+    if (!Vars.state.isGame()) return
+
+    // If the cheat was just enabled, force a refresh
+    if (vars.maxEfficiencyEnabled && !_maxEffLastState) {
+        _refreshMaxEffTracked()
+        _maxEffLastState = true
+    } else if (!vars.maxEfficiencyEnabled && _maxEffLastState) {
+        // disabled -> clear cache
+        _maxEffTracked = []
+        _maxEffLastState = false
+        return
+    }
+
+    if (!vars.maxEfficiencyEnabled) return
+
+    _maxEffUpdateCounter++
+    if (_maxEffUpdateCounter < 20) return // do main work every 20 ticks
+    _maxEffUpdateCounter = 0
+
+    _maxEffRefreshCounter++
+    if (_maxEffRefreshCounter >= _maxEffRefreshInterval) {
+        _refreshMaxEffTracked()
+        _maxEffRefreshCounter = 0
+    }
+
+    // Iterate only cached builds; remove invalid/removed builds lazily
+    for (let i = 0; i < _maxEffTracked.length; i++) {
+        let build = _maxEffTracked[i]
+        if (build == null || build.block == null) {
+            _maxEffTracked.splice(i, 1)
+            i--
+            continue
+        }
+
+        try {
+            if (build.liquids != null && build.block != null && build.block.liquidCapacity > 0) {
+                Vars.content.liquids().each(liquid => {
+                    const missingLiquid = build.block.liquidCapacity - build.liquids.get(liquid)
+                    if (missingLiquid > 0.001) build.liquids.add(liquid, missingLiquid)
+                })
+            }
+
+            if (build.power != null && build.power.status < 1) build.power.status = 1
+
+            if (build.applyBoost != null && build.block != null && build.block.canOverdrive) build.applyBoost(40, 2)
+        } catch (e) {
+            Log.infoTag("Cheat Codes Mod", e)
+        }
+    }
+})
 
 module.exports = {
     newCheat: newCheat,
