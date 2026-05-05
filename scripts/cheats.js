@@ -4,6 +4,18 @@ const vars = require("cheat-codes/vars")
 const bullets = require("cheat-codes/bullets")
 const functions = require("cheat-codes/functions")
 
+// Mobile-friendly slow effect: applied to other units to simulate a global slowdown
+const mobileTimestop = extend(StatusEffect, "cc-mobile-timestop", {
+    update(unit, time) {
+        // fixed multipliers so values don't stack each tick
+        unit.speedMultiplier = 0.05
+        unit.reloadMultiplier = 0.05
+        unit.dragMultiplier = 1
+        unit.damageMultiplier = 1
+    },
+    isHidden() { return true }
+})
+
 let cooldowns = {}
 
 function addCooldown(name, cooldown) {
@@ -190,7 +202,18 @@ const cheatList = [
 
     //    Slows down time while accelerating the player for 9 seconds
     newCheat("za warudo", "zawarudo", 1, () => {
-        let playerUnit = Vars.player.unit()
+        // Guard: ensure there's a player unit and don't attempt time-stop on mobile
+        let playerUnit = null
+        try { playerUnit = Vars.player.unit() } catch (e) { playerUnit = null }
+
+        if (playerUnit == null) {
+            Log.infoTag("Cheat Codes Mod", "No player unit available for za warudo")
+            try { Vars.ui.showInfoPopup("No player unit to time-stop.", 3, 1,1,1,1,1) } catch (e) {}
+            return
+        }
+
+        let isMobile = Vars.mobile
+
         let unitType = playerUnit.type
         let timeControl = Vars.mods.getMod("time-control");
         if (timeControl != null && timeControl.isSupported() && timeControl.enabled()) {
@@ -198,14 +221,7 @@ const cheatList = [
             return
         }
 
-        // if (Vars.mobile) {
-        //     Log.infoTag("You don't have enough power to stop time (PC Only)")
-        //     return 
-        // }
-
-        if (playerUnit.hasEffect(effects.timestop)) {
-            return
-        }
+        if (playerUnit.hasEffect(effects.timestop)) return
 
         let multiplier = vars.timeStopMultiplier
 
@@ -222,18 +238,20 @@ const cheatList = [
             lightScl: 0
         })
 
-        let zaWave = new WaveEffect()
-        Object.assign(zaWave, {
-            colorFrom: new Color(.4,0,.8,1),
-            colorTo: new Color(.6,.6,.3,0),
-            sizeFrom: 0,
-            sizeTo: 1000,
-            strokeFrom: 0,
-            strokeTo: 100,
-            lifetime: 60 * multiplier,
-            lightScl: 0
-        })
-        
+         let visualMultiplier = isMobile ? 1 : multiplier
+
+         let zaWave = new WaveEffect()
+         Object.assign(zaWave, {
+             colorFrom: new Color(.4,0,.8,1),
+             colorTo: new Color(.6,.6,.3,0),
+             sizeFrom: 0,
+             sizeTo: 1000,
+             strokeFrom: 0,
+             strokeTo: 100,
+             lifetime: 60 * visualMultiplier,
+             lightScl: 0
+         })
+
         let playerPosition = new Vec2(playerUnit.x, playerUnit.y)
 
         prezaWave.at(playerPosition)
@@ -263,25 +281,45 @@ const cheatList = [
                 zaWave.at(playerPosition)
             })
 
-            //    Time stop
+            //    Time stop (desktop) or mobile-friendly slow (mobile)
             let duration = 9
-            playerUnit.apply(effects.timestop, 1000)
-            let oldAccel = unitType.accel
-            let oldDrag = unitType.drag
-            unitType.accel = oldAccel / multiplier
-            unitType.drag = oldDrag / multiplier
 
-            Time.setDeltaProvider(() => Core.graphics.getDeltaTime() * 60 * multiplier)
-            Timer.schedule(() => {
-                Time.setDeltaProvider(() => Core.graphics.getDeltaTime() * 60)
-                playerUnit.vel.set(0, 0)
-                playerUnit.unapply(effects.timestop)
-                unitType.accel = oldAccel
-                unitType.drag = oldDrag
+            if (isMobile) {
+                // Simulate slowdown by applying a strong slow effect to other units
+                let durTicks = duration * 60
+                Groups.unit.each(u => {
+                    try {
+                        if (u != playerUnit) u.apply(mobileTimestop, durTicks)
+                    } catch (e) {}
+                })
 
-                Vars.state.rules.lighting = prevLighting
-                Vars.state.rules.ambientLight = prevAmbientLight
-            }, duration)
+                // Give the player a speed boost so they feel fast relative to slowed units
+                try { playerUnit.apply(effects.quickfox, durTicks) } catch (e) {}
+
+                // restore lighting after duration
+                Timer.schedule(() => {
+                    Vars.state.rules.lighting = prevLighting
+                    Vars.state.rules.ambientLight = prevAmbientLight
+                }, duration)
+            } else {
+                playerUnit.apply(effects.timestop, 1000)
+                let oldAccel = unitType.accel
+                let oldDrag = unitType.drag
+                unitType.accel = oldAccel / multiplier
+                unitType.drag = oldDrag / multiplier
+
+                Time.setDeltaProvider(() => Core.graphics.getDeltaTime() * 60 * multiplier)
+                Timer.schedule(() => {
+                    Time.setDeltaProvider(() => Core.graphics.getDeltaTime() * 60)
+                    playerUnit.vel.set(0, 0)
+                    playerUnit.unapply(effects.timestop)
+                    unitType.accel = oldAccel
+                    unitType.drag = oldDrag
+
+                    Vars.state.rules.lighting = prevLighting
+                    Vars.state.rules.ambientLight = prevAmbientLight
+                }, duration)
+            }
         })
     }),
 
